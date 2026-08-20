@@ -2,10 +2,30 @@ import dataclasses
 import importlib
 import inspect
 import pkgutil
+import re
 import types
 import typing
 
 from .custom_resource import CustomResource, Scope
+
+
+def sort_api_versions(version):
+    m = re.fullmatch(r"v(\d+)(?:(alpha|beta)(\d+))?", version)
+    if not m:
+        raise ValueError(f"Invalid API version: {version}")
+
+    major = int(m.group(1))
+    stage = m.group(2)
+    revision = int(m.group(3) or 0)
+
+    # alpha < beta < stable
+    stability = {
+        "alpha": 0,
+        "beta": 1,
+        None: 2,
+    }[stage]
+
+    return major, stability, revision
 
 
 @dataclasses.dataclass
@@ -19,9 +39,9 @@ class CustomResourceDefinitionVersion:
     # The model that defines the schema for the version
     model: CustomResource
     # The subresources for the version
-    subresources: typing.Dict[str, typing.Any]
+    subresources: dict[str, typing.Any]
     # A list of printer column definitions for the version
-    printer_columns: typing.List[typing.Dict[str, typing.Any]]
+    printer_columns: list[dict[str, typing.Any]]
     # Indicates if this is the storage version
     storage: bool
 
@@ -43,15 +63,15 @@ class CustomResourceDefinition:
     # The scope of the resource
     scope: Scope
     # A list of short names for the resource
-    short_names: typing.List[str]
+    short_names: list[str]
     # A list of categories for the resource
-    categories: typing.List[str]
+    categories: list[str]
     # The versions for the resource, indexed by name
-    versions: typing.Dict[str, CustomResourceDefinitionVersion]
+    versions: dict[str, CustomResourceDefinitionVersion]
 
     def kubernetes_resource(
         self, /, include_defaults: bool = False
-    ) -> typing.Dict[str, typing.Any]:
+    ) -> dict[str, typing.Any]:
         return {
             "apiVersion": "apiextensions.k8s.io/v1",
             "kind": "CustomResourceDefinition",
@@ -105,13 +125,11 @@ class CustomResourceRegistry:
     Class for indexing and querying available custom resources.
     """
 
-    def __init__(
-        self, api_group: str, categories: typing.Optional[typing.List[str]] = None
-    ):
+    def __init__(self, api_group: str, categories: list[str] | None = None):
         self._api_group = api_group
         self._categories = categories or []
         # The indexed CRDs indexed by a tuple of (API group, kind)
-        self._crds: typing.Dict[typing.Tuple[str, str], CustomResourceDefinition] = {}
+        self._crds: dict[tuple[str, str], CustomResourceDefinition] = {}
 
     def register_model(self, model: CustomResource):
         """
@@ -152,7 +170,22 @@ class CustomResourceRegistry:
                 },
             ),
         )
+        self.set_storage_version(self._crds[key])
         return model
+
+    def set_storage_version(self, crd):
+        """
+        Sort all available versions in a CRD and set the latest to be the
+            storage version.
+        """
+        versions = getattr(crd, "versions")
+        version_list = sorted(list(versions.keys()), key=sort_api_versions)
+
+        for api_version in version_list:
+            version_spec = versions[api_version]
+            version_spec.storage = False
+        version_spec = versions[version_list[-1]]
+        version_spec.storage = True
 
     def discover_models(self, module: types.ModuleType):
         """
@@ -171,13 +204,13 @@ class CustomResourceRegistry:
                     importlib.import_module(f".{name}", module.__name__)
                 )
 
-    def get_crd(self, api_group, kind) -> typing.Type[CustomResourceDefinition]:
+    def get_crd(self, api_group, kind) -> type[CustomResourceDefinition]:
         """
         Returns the CRD definition for the given API group and kind.
         """
         return self._crds[(api_group, kind)]
 
-    def get_model(self, api_group, version, kind) -> typing.Type[CustomResource]:
+    def get_model(self, api_group, version, kind) -> type[CustomResource]:
         """
         Returns the model associated with the given API group, version and kind.
         """

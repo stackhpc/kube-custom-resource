@@ -63,6 +63,7 @@ class CarSpec(s.BaseModel):
     )
     engine: Engine = p.Field(..., description="The engine for the car.")
     colour: Colour = p.Field(..., description="The colour of the car.")
+    coolness: s.conint(gt=0) = p.Field(..., description="Coolness score")
     owner: s.Optional[
         s.constr(pattern=r"^[a-zA-Z0-9 ]*$", strip_whitespace=True, min_length=1)
     ] = p.Field(None, description="The owner of the car.")
